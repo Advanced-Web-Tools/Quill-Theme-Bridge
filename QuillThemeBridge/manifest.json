@@ -18,7 +18,8 @@
     },
     {
       "name": "ThemeEngine",
-      "version": ">=1.0.5"
+      "version": ">=1.0.5",
+      "url": "https://github.com/Advanced-Web-Tools/Theme-Engine/releases/download/ThemeEngine-1.0.5/ThemeEngine-1.0.5.zip"
     },
     {
       "name": "Quill",
