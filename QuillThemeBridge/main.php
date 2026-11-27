@@ -1,7 +1,7 @@
 <?php
 use runtime\api\RuntimeAPI;
 use ThemeEngine\service\Engine;
-use QuillThemeBridge\services\{DatabaseLinks, Resources, LinkedEditing, BridgeListener, ThemeRecovery, RecoverThemeCommand, QuillCacheInvalidation};
+use QuillThemeBridge\services\{DatabaseLinks, Resources, LinkedEditing, BridgeListener, ThemeRecovery, RecoverThemeCommand, QuillCacheInvalidation, QuillSiteAppearance};
 use Quill\api\events\{ExternalPagesRequestEvent, ExternalComponentsRequestEvent, ExternalColorPalettesRequestEvent, PageDocumentRequestEvent};
 use ThemeEngine\api\events\PageReadyEvent;
 
@@ -31,6 +31,10 @@ final class QuillThemeBridge extends RuntimeAPI
         $this->setShared('palettes', $palettes);
         foreach ([ExternalPagesRequestEvent::NAME, ExternalComponentsRequestEvent::NAME, ExternalColorPalettesRequestEvent::NAME,
             PageDocumentRequestEvent::NAME, PageReadyEvent::NAME] as $event) $this->eventDispatcher->addListener($event, $listener);
+        $siteAppearance = new QuillSiteAppearance($engine->appearance);
+        foreach (['router.enter', PageDocumentRequestEvent::NAME, \URPC\api\events\BeforeRenderEvent::NAME] as $event) {
+            $this->eventDispatcher->addListener($event, $siteAppearance);
+        }
         $this->setShared('linkedEditing', new LinkedEditing($resources, $links));
     }
 }
