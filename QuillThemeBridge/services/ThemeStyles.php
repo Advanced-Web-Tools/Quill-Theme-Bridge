@@ -12,17 +12,27 @@ final class ThemeStyles
 {
     public const PROPERTY = 'quillThemeBridge';
     private array $providers = [];
-    public function __construct(private readonly Engine $engine) {}
+    public function __construct(private readonly Engine $engine, private readonly ?ThemeRecovery $recovery = null) {}
     public function register(int $themeId, IThemeStyleProvider $provider): void
     {
         if ($themeId < 1 || isset($this->providers[$themeId])) throw new \InvalidArgumentException('Invalid or duplicate theme style provider.');
         $this->providers[$themeId] = $provider;
     }
+    public function activeAppearance(): ?array
+    {
+        return $this->engine->hasActiveTheme() ? $this->describe($this->engine->activeTheme()->packageId) : null;
+    }
     public function describe(int $themeId, string $pageKey = ''): array
     {
+        $themeId = $this->recovery?->installedThemeId($themeId) ?? $themeId;
         $engine = (new ThemeDocuments($this->engine))->selected($themeId); $theme = $engine->activeTheme();
         $context = new ThemePageContext(new Context($theme->root . '/', $theme->name, (string) $themeId), $theme, $pageKey, $engine->settings(), []);
-        $provider = $this->providers[$themeId] ?? ($theme->name === 'StillTheme' ? new StillThemeStyleProvider() : null);
+        $provider = $this->providers[$themeId] ?? match ($theme->name) {
+            'StillTheme' => new StillThemeStyleProvider(),
+            'MonoTheme' => new MonoThemeStyleProvider(),
+            'TerraTheme' => new TerraThemeStyleProvider(),
+            default => null,
+        };
         try { $style = $provider?->style($context) ?? new ThemeStyle(); }
         catch (\Throwable $error) {
             error_log('QuillThemeBridge theme appearance ' . $themeId . ': ' . $error->getMessage());

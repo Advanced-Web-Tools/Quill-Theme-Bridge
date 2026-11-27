@@ -55,20 +55,27 @@ final class QuillViewExtension implements IEventListener
             $script = $dom->createElement('script'); $script->setAttribute('src', '/awt_packages/QuillThemeBridge/assets/quill-resources.js'); $script->setAttribute('defer', '');
             $script->setAttribute('data-quill-theme-resources', json_encode($this->resources->metadata, JSON_THROW_ON_ERROR));
             $styles = [];
-            foreach ($this->resources->metadata as $key => $resource) if (isset($resource['theme_style'])) {
+            foreach ($this->resources->metadata as $resource) if (isset($resource['theme_style'])) {
                 $styles[$resource['themeKey'] . ':' . $resource['pageKey']] = $resource['theme_style'];
             }
             $visit = function (array $blocks) use (&$visit, &$styles): void {
                 foreach ($blocks as $block) {
                     $reference = $block['descriptor']['props'][ThemeStyles::PROPERTY] ?? null;
                     if (is_array($reference) && is_int($reference['themeKey'] ?? null) && is_string($reference['pageKey'] ?? null)) {
-                        try { $styles[$reference['themeKey'] . ':' . $reference['pageKey']] = $this->resources->themeStyles()->describe($reference['themeKey'], $reference['pageKey']); }
+                        try { $styles[$reference['themeKey'] . ':' . $reference['pageKey']] ??= $this->resources->themeStyles()->describe($reference['themeKey'], $reference['pageKey']); }
                         catch (\Throwable $error) { error_log('QuillThemeBridge editor styles: ' . $error->getMessage()); }
                     }
                     $visit($block['children'] ?? []);
                 }
             };
             foreach ($bootstrap['document']['sections'] ?? [] as $section) $visit($section['blocks']);
+            $sourceKey = $bootstrap['externalSourceKey'] ?? null;
+            $appearance = ['source' => is_string($sourceKey) ? ($this->resources->metadata[$sourceKey]['theme_style'] ?? null) : null, 'active' => null];
+            if ($sourceKey === null && ($bootstrap['editorType'] ?? 'page') === 'page') {
+                try { $appearance['active'] = $this->resources->themeStyles()->activeAppearance(); }
+                catch (\Throwable $error) { error_log('QuillThemeBridge active editor theme: ' . $error->getMessage()); }
+            }
+            $script->setAttribute('data-quill-theme-appearance', json_encode($appearance, JSON_THROW_ON_ERROR));
             $script->setAttribute('data-quill-theme-styles', json_encode($styles, JSON_THROW_ON_ERROR));
             $head = $dom->getElementsByTagName('head')->item(0); $head?->appendChild($script);
         }

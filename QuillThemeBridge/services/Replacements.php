@@ -7,11 +7,13 @@ use URPC\api\contracts\{IURPCDocument, IURPCBlock};
 final class Replacements
 {
     /** Return [isolated document, number of replaced roots]. Identity comes from snapshot metadata. */
-    public function apply(IURPCDocument $original, ConversionResult $published, callable $diagnostic, ?int $themeKey = null, ?string $pageKey = null): array
+    public function apply(IURPCDocument $original, ConversionResult $published, callable $diagnostic, ?int $themeKey = null, ?string $pageKey = null,
+        array $sourceUids = []): array
     {
         $index = []; $counts = []; $targetCounts = [];
         foreach (Documents::walk($original) as $block) {
             $uid = $block->getBlockDescriptor()->getBlockUid();
+            $uid = $sourceUids[$uid] ?? $uid;
             if ($uid !== '') $targetCounts[$uid] = ($targetCounts[$uid] ?? 0) + 1;
         }
         foreach (Documents::walk($published->document) as $block) {
@@ -36,12 +38,13 @@ final class Replacements
             if (!$check($root)) unset($index[$uid]);
         }
         $document = Documents::copy($original); $replaced = 0;
-        $visit = function (array $blocks) use (&$visit, $index, &$replaced): array {
+        $visit = function (array $blocks) use (&$visit, $index, $sourceUids, &$replaced): array {
             $result = [];
             foreach ($blocks as $block) {
                 $uid = $block->getBlockDescriptor()->getBlockUid();
-                if (isset($index[$uid])) {
-                    $replacement = Documents::block($index[$uid]);
+                $sourceUid = $sourceUids[$uid] ?? $uid;
+                if (isset($index[$sourceUid])) {
+                    $replacement = Documents::block($index[$sourceUid]);
                     $replacement->getBlockDescriptor()->setBlockUid($uid);
                     $replacement->getBlockDescriptor()->setSourceKey($block->getBlockDescriptor()->getSourceKey());
                     $result[] = $replacement; $replaced++;

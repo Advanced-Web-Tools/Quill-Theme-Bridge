@@ -3,14 +3,22 @@ namespace QuillThemeBridge\services;
 
 use context\Context;
 use ThemeEngine\service\Engine;
-use ThemeEngine\api\ThemePageContext;
 use Quill\api\resources\{ExternalDocument, DocumentRegistry};
 
 final class Resources
 {
     private readonly ThemeStyles $styles;
-    public function __construct(private readonly Engine $engine, private readonly Context $context, ?ThemeStyles $styles = null) { $this->styles = $styles ?? new ThemeStyles($engine); }
+    public function __construct(private readonly Engine $engine, private readonly Context $context, ?ThemeStyles $styles = null,
+        private readonly ?ThemeRecovery $recovery = null) { $this->styles = $styles ?? new ThemeStyles($engine, $recovery); }
     public function themeStyles(): ThemeStyles { return $this->styles; }
+    public function sourceThemeId(int $themeId, string $type, string $key): int
+    {
+        return $this->recovery?->resourceThemeId($themeId, $type, $key) ?? $themeId;
+    }
+    public function resourceKey(int $themeId, string $type, string $key): string
+    {
+        return Keys::resource($this->sourceThemeId($themeId, $type, $key), $type, $key);
+    }
     public array $metadata = [];
     public function register(DocumentRegistry $registry, bool $components, callable $diagnostic): void
     {
@@ -22,12 +30,12 @@ final class Resources
             try { $selected = (new ThemeDocuments($this->engine))->selected($theme->packageId); $definition = $selected->definition(); }
             catch (\Throwable $error) { $diagnostic('Theme ' . $theme->packageId . ': ' . $error->getMessage()); continue; }
             $active = $this->engine->hasActiveTheme() && $this->engine->activeTheme()->packageId === $theme->packageId;
-            $add = function (string $type, string $key, string $name, callable $document, ?string $url = null) use ($theme, $definition, $active, $registry, $diagnostic): void {
+            $add = function (string $type, string $key, callable $load) use ($theme, $definition, $active, $registry, $diagnostic): void {
                 try {
                     $pageKey = $type === 'page' ? $key : '';
-                    $key = Keys::resource($theme->packageId, $type, $key);
-                    $registry->add(new ExternalDocument($key, $name, $definition->label, ($type === 'page' ? $document() : $this->styles->mark($document(), $theme->packageId, $pageKey)), $theme->description ?? '', $url));
-                    $this->metadata[$key] = ['group' => $active ? 'Active theme' : 'Other themes', 'group_key' => 'theme:' . $theme->packageId,
+                    $resource = $load();
+                    $registry->add($resource);
+                    $this->metadata[$resource->key] = ['group' => $active ? 'Active theme' : 'Other themes', 'group_key' => 'theme:' . $theme->packageId,
                         'themeKey' => $theme->packageId, 'pageKey' => $pageKey, 'provider' => $definition->label, 'resource_type' => match ($type) { 'part' => 'Layout part', 'widget' => 'Widget', default => 'Page' }, 'active_theme' => $active, 'theme_style' => $this->styles->describe($theme->packageId, $pageKey)];
                 } catch (\Throwable $error) { $diagnostic('Theme ' . $theme->packageId . ' ' . $type . ' ' . $key . ': ' . $error->getMessage()); }
             };
@@ -35,17 +43,18 @@ final class Resources
                 foreach ($definition->pages as $page) {
                     $url = null;
                     foreach ($definition->routes as $route) if ($route->pageKey === $page->key) { $url = $route->path; break; }
-                    $add('page', $page->key, $page->label, fn () => $this->page($theme->packageId, $page->key), $url);
+                    $add('page', $page->key, fn () => new ExternalDocument($this->resourceKey($theme->packageId, 'page', $page->key),
+                        $page->label, $definition->label, $this->page($theme->packageId, $page->key), $theme->description ?? '', $url));
                 }
             } else {
-                foreach ($definition->sections as $slot => $source) $add('part', $slot, ucfirst($slot), fn () => (new ThemeDocuments($this->engine))->part($theme->packageId, $slot));
-                foreach ($selected->widgets->all() as $widget) $add('widget', $widget->key, $widget->label, fn () => (new ThemeDocuments($this->engine))->widget($theme->packageId, $widget->key));
+                foreach (array_keys($definition->sections) as $slot) $add('part', $slot, fn () => $this->component($theme->packageId, 'part', $slot));
+                foreach ($selected->widgets->all() as $widget) $add('widget', $widget->key, fn () => $this->component($theme->packageId, 'widget', $widget->key));
             }
         }
     }
     public function page(int $themeKey, string $pageKey): \URPC\api\contracts\IURPCDocument
     {
-        return $this->styles->mark((new ThemeDocuments($this->engine))->page($themeKey, $pageKey), $themeKey, $pageKey);
+        return $this->styles->mark((new ThemeDocuments($this->engine))->page($themeKey, $pageKey), $this->sourceThemeId($themeKey, 'page', $pageKey), $pageKey);
     }
     /** Original provider document only: discovery must never resolve its own saved overrides. */
     public function component(int $themeKey, string $type, string $key): ExternalDocument
@@ -56,7 +65,8 @@ final class Resources
             'widget' => $documents->widget($themeKey, $key),
             default => throw new \InvalidArgumentException('Unknown theme component type.'),
         };
-        return new ExternalDocument(Keys::resource($themeKey, $type, $key), $type === 'part' ? ucfirst($key) : $engine->widgets->all()[$key]->label,
-            $engine->definition()->label, $this->styles->mark($document, $themeKey), $engine->activeTheme()->description ?? '');
+        $sourceThemeId = $this->sourceThemeId($themeKey, $type, $key);
+        return new ExternalDocument(Keys::resource($sourceThemeId, $type, $key), $type === 'part' ? ucfirst($key) : $engine->widgets->all()[$key]->label,
+            $engine->definition()->label, $this->styles->mark($document, $sourceThemeId), $engine->activeTheme()->description ?? '');
     }
 }
