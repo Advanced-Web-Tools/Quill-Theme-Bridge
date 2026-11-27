@@ -1,7 +1,7 @@
 {
   "name": "QuillThemeBridge",
-  "version": "1.1.0",
-  "minimum_awt_version": "27.1.0",
+  "version": "1.2.0",
+  "minimum_awt_version": "27.2.0",
   "maximum_awt_version": null,
   "author": "ElStefanos",
   "type": 1,
@@ -18,13 +18,13 @@
     },
     {
       "name": "ThemeEngine",
-      "version": ">=1.0.5",
-      "url": "https://github.com/Advanced-Web-Tools/Theme-Engine/releases/download/ThemeEngine-1.0.5/ThemeEngine-1.0.5.zip"
+      "version": ">=1.2.1",
+      "url": "https://github.com/Advanced-Web-Tools/Theme-Engine/releases/download/1.2.1/ThemeEngine-1.2.1.zip"
     },
     {
       "name": "Quill",
-      "version": ">=1.0.2",
-      "url": "https://github.com/Advanced-Web-Tools/Quill/releases/download/Quill-1.0.2/Quill-1.0.2.zip"
+      "version": ">=1.1.0",
+      "url": "https://github.com/Advanced-Web-Tools/Quill/releases/download/1.1.0/Quill-1.1.0.zip"
     }
   ]
 }

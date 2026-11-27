@@ -2,7 +2,7 @@
 
 AWT package connecting ThemeEngine, Quill and URPC through their existing public classes and events. **No dependency files are changed.** All adapters, event listeners, public assets and link storage belong to this package. There are no bridge controllers, routes, administrative views, modals or frontend application.
 
-Requirements: PHP 8.2+, AWT 27.2+, ThemeEngine 1.0.5+, Quill 1.0.2+, URPC 1.1.0+. Install the dependencies normally, then install/update and enable the bridge through AWT PackageManager. Install/update hooks create the bridge link and theme recovery tables. No compatibility patch installer, class aliases, vendor namespace replacements or copied upstream classes are needed.
+Requirements: PHP 8.2+, AWT 27.2+, ThemeEngine 1.2.1+, Quill 1.1.0+, URPC 1.1.1+ (required by ThemeEngine). Install the dependencies normally, then install/update and enable the bridge through AWT PackageManager. Install/update hooks create the bridge link and theme recovery tables. No compatibility patch installer, class aliases, vendor namespace replacements or copied upstream classes are needed.
 
 ## Integration
 
@@ -12,6 +12,7 @@ Requirements: PHP 8.2+, AWT 27.2+, ThemeEngine 1.0.5+, Quill 1.0.2+, URPC 1.1.0+
 | `quill.external.components.request` | Register global layout parts and widgets of every available theme, including currently hidden parts. |
 | `quill.external.color_palettes.request` | Discover all palettes of the active available theme through supplied or explicitly registered adapters. |
 | `quill.page.document.request` | Compose the already converted published Quill document into the active theme's global layout and retain Quill assets. |
+| `urpc.before_render` | Apply ThemeEngine's site-wide browser title format and favicon to public Quill pages. |
 | `theme_engine.page.ready` | Apply published component changes in their native layout slots/widget placements, then page-specific published UID replacements for the actually rendered theme/page. Applies in public rendering and ThemeEngine preview. |
 | AWT `renderer.ready` | Group resources inside existing Quill Pages → Other and Components → External views and attach the existing editor's resource extension. |
 | AWT `router.enter` | After a successful Quill write request, dispatch `urpc.template_cache.invalidate` for the affected Quill and theme page namespaces. |
@@ -20,6 +21,8 @@ Requirements: PHP 8.2+, AWT 27.2+, ThemeEngine 1.0.5+, Quill 1.0.2+, URPC 1.1.0+
 ThemeEngine final classes are consumed by composition. `ThemeDocuments` uses public Engine configuration, ThemeRegistry file resolution, JsonSourceCache, ISectionProvider, SidebarWidgetRegistry, LayoutBuilder and BlockIdentity. Page source acquisition calls `Engine::createDocument`; no page controller action, widget block renderer or full page renderer is executed by registration. The bridge does not reconstruct ThemeEngine configuration or maintain a second theme engine.
 
 Global composition keeps every Quill section's blocks, the native outer layout and slot order, global visibility and global widget order. It does not select an arbitrary ThemeEngine page or apply its local overrides. Components use ThemeEngine's own native slot/widget wrappers, including multi-root source content. A failure in one resource/theme is diagnosed through `error_log` without removing other themes.
+
+ThemeEngine's Site settings also apply to public Quill routes, including pages rendered as fragments. The selected format uses the Quill page name. **Theme default** keeps Quill's standard title, and a configured favicon replaces existing icon links.
 
 ## Stable identities and grouping
 
