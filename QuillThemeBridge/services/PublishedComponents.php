@@ -16,8 +16,62 @@ final class PublishedComponents
     {
         $descriptor = $block->getBlockDescriptor(); $props = $descriptor->getBlockProps();
         unset($props[ThemeStyles::PROPERTY]);
+        $attributes = $block->getBlockAttributes();
+        // Theme controllers and navigation widgets mark the active item at render time.
+        unset($attributes['aria-current']);
         return [$descriptor->getBlockName(), $descriptor->getBlockRenderer(), $props,
-            $block->getBlockAttributes(), $block->getBlockContent(), array_map(self::structure(...), array_values($block->getBlockChildren()))];
+            $attributes, $block->getBlockContent(), array_map(self::structure(...), array_values($block->getBlockChildren()))];
+    }
+    /** Pair children only after verifying the complete native and provider trees are equivalent. */
+    private static function preservePlacements(array $native, array $baseline, array $publishedByUid): void
+    {
+        $native = array_values($native);
+        foreach (array_values($baseline) as $index => $source) {
+            $target = $native[$index];
+            $published = $publishedByUid[$source->getBlockDescriptor()->getBlockUid()] ?? null;
+            if ($published !== null) self::preservePlacement($target, $source, $published);
+            self::preservePlacements($target->getBlockChildren(), $source->getBlockChildren(), $publishedByUid);
+        }
+    }
+    private static function preservePlacement(IURPCBlock $target, IURPCBlock $source, IURPCBlock $published): void
+    {
+        $descriptor = $target->getBlockDescriptor();
+        $published->getBlockDescriptor()->setBlockUid($descriptor->getBlockUid());
+        $published->getBlockDescriptor()->setSourceKey($descriptor->getSourceKey());
+        $key = ['aria-current' => true];
+        $original = array_intersect_key($source->getBlockAttributes(), $key);
+        $current = array_intersect_key($target->getBlockAttributes(), $key);
+        $attributes = $published->getBlockAttributes();
+        if ($original !== $current && $original === array_intersect_key($attributes, $key)) {
+            $published->setBlockAttributes(array_replace(array_diff_key($attributes, $key), $current));
+        }
+    }
+
+    /** Match unique, unchanged subtrees across placements with different native source namespaces. */
+    private static function contextualUids(IURPCDocument $native, IURPCBlock $baseline, array $publishedByUid): array
+    {
+        $source = new URPCDocument();
+        $source->fromArray(['main' => $baseline->getBlockChildren()]);
+        $group = static function (IURPCDocument $document): array {
+            $groups = [];
+            foreach (Documents::walk($document) as $block) {
+                $signature = hash('sha256', json_encode(self::structure($block), JSON_THROW_ON_ERROR | JSON_PRESERVE_ZERO_FRACTION));
+                $groups[$signature][] = $block;
+            }
+            return $groups;
+        };
+        $targets = $group($native);
+        $uids = [];
+        foreach ($group($source) as $signature => $sources) {
+            if (count($sources) !== 1 || count($targets[$signature] ?? []) !== 1) continue;
+            $original = $sources[0];
+            $target = $targets[$signature][0];
+            $sourceUid = $original->getBlockDescriptor()->getBlockUid();
+            if (!isset($publishedByUid[$sourceUid])) continue;
+            $uids[$target->getBlockDescriptor()->getBlockUid()] = $sourceUid;
+            self::preservePlacement($target, $original, $publishedByUid[$sourceUid]);
+        }
+        return $uids;
     }
     private static function changedFields(array $target, array $baseline, array $published): array
     {
@@ -34,6 +88,8 @@ final class PublishedComponents
         $apply = function (IURPCBlock $target, string $type, string $key) use ($theme, $overrides, &$sources, &$baselines, &$used, $diagnostic): IURPCBlock {
             $resourceKey = Keys::resource($theme->packageId, $type, $key);
             try {
+                $sourceThemeId = $this->resources->sourceThemeId($theme->packageId, $type, $key);
+                $resourceKey = Keys::resource($sourceThemeId, $type, $key);
                 if (!array_key_exists($resourceKey, $sources)) {
                     $owner = $overrides->find($resourceKey, 'component');
                     $sources[$resourceKey] = null;
@@ -53,25 +109,27 @@ final class PublishedComponents
                 $published = (new \Quill\services\conversion\quillToUrpc\QuillToUrpcConverter())->convert(
                     new ComponentInstanceSource($sources[$resourceKey], $instanceKey));
                 StylePriority::inline($published->document);
+                $publishedByUid = [];
                 foreach (Documents::walk($published->document) as $block) {
-                    $identity = SourceIdentity::read($published->blockSources[spl_object_id($block)] ?? null);
+                    $id = spl_object_id($block);
+                    if (($published->blockSourceScopes[$id] ?? null) !== $sources[$resourceKey]->getScopeKey()) continue;
+                    $identity = SourceIdentity::read($published->blockSources[$id] ?? null);
                     if ($identity !== null) {
                         $block->getBlockDescriptor()->setBlockUid($identity['uid']);
                         $block->getBlockDescriptor()->setSourceKey($identity['source']);
+                        $publishedByUid[$identity['uid']] = $block;
                     }
                 }
-                $extras = []; $sourceTarget = Documents::block($target);
+                $extras = []; $nativeChildren = array_values($target->getBlockChildren());
                 if ($type === 'part') {
                     $children = [];
-                    foreach ($sourceTarget->getBlockChildren() as $child) {
+                    foreach ($nativeChildren as $child) {
                         $widgetKey = $child->getBlockAttributes()['data-te-widget'] ?? null;
                         if (is_string($widgetKey) && $child->getBlockDescriptor()->getSourceKey() === $theme->name . '/widgets/' . $key . '/' . $widgetKey) $extras[] = $child;
                         else $children[] = $child;
                     }
-                    $sourceTarget->setBlockChildren($children);
+                    $nativeChildren = $children;
                 }
-                $scope = new URPCDocument(); $scope->addBlock('main', $target);
-                [$replacement] = (new Replacements())->apply($scope, $published, $diagnostic, $theme->packageId, '');
                 // The native wrapper is explicitly identified by slot/widget key. Its UID can
                 // differ by placement or by additional widgets in a sidebar. Apply its own
                 // edited fields while retaining the actual instance's UID and complete children.
@@ -81,9 +139,21 @@ final class PublishedComponents
                     $root = $block;
                 }
                 if ($root === null) return $target;
-                $replacement = array_values($replacement->getBlocks('main'))[0];
-                $instance = Documents::block($root);
                 $baseline = $baselines[$resourceKey];
+                $baselineChildren = array_values($baseline->getBlockChildren());
+                $sameSource = json_encode(array_map(self::structure(...), $nativeChildren), JSON_THROW_ON_ERROR | JSON_PRESERVE_ZERO_FRACTION)
+                    === json_encode(array_map(self::structure(...), $baselineChildren), JSON_THROW_ON_ERROR | JSON_PRESERVE_ZERO_FRACTION);
+                if ($sameSource) {
+                    self::preservePlacements($nativeChildren, $baselineChildren, $publishedByUid);
+                    $children = $root->getBlockChildren();
+                } else {
+                    $scope = new URPCDocument();
+                    $scope->fromArray(['main' => $nativeChildren]);
+                    $sourceUids = self::contextualUids($scope, $baseline, $publishedByUid);
+                    [$replacement] = (new Replacements())->apply($scope, $published, $diagnostic, $sourceThemeId, '', $sourceUids);
+                    $children = $replacement->getBlocks('main');
+                }
+                $instance = clone $root;
                 $descriptor = clone $target->getBlockDescriptor(); $edited = $root->getBlockDescriptor(); $base = $baseline->getBlockDescriptor();
                 if ($edited->getBlockName() !== $base->getBlockName()) $descriptor->setBlockName($edited->getBlockName());
                 if ($edited->getBlockRenderer() !== $base->getBlockRenderer()) $descriptor->setBlockRenderer($edited->getBlockRenderer());
@@ -92,14 +162,7 @@ final class PublishedComponents
                 $descriptor->setBlockProps($props); $instance->setBlockDescriptor($descriptor);
                 $instance->setBlockAttributes(self::changedFields($target->getBlockAttributes(), $baseline->getBlockAttributes(), $root->getBlockAttributes()));
                 if ($root->getBlockContent() === $baseline->getBlockContent()) $instance->setBlockContent($target->getBlockContent());
-                // Identical provider instances can have placement-specific native UIDs. The
-                // explicit resource key identifies the complete source, not a positional UID map.
-                // Context-dependent trees keep conservative per-UID replacements instead.
-                $sameSource = json_encode(self::structure($sourceTarget), JSON_THROW_ON_ERROR | JSON_PRESERVE_ZERO_FRACTION)
-                    === json_encode(self::structure($baseline), JSON_THROW_ON_ERROR | JSON_PRESERVE_ZERO_FRACTION);
-                $instance->setBlockChildren($sameSource ? [...$instance->getBlockChildren(), ...$extras] : $replacement->getBlockChildren());
-                $instance->getBlockDescriptor()->setBlockUid($target->getBlockDescriptor()->getBlockUid());
-                $instance->getBlockDescriptor()->setSourceKey($target->getBlockDescriptor()->getSourceKey());
+                $instance->setBlockChildren([...array_values($children), ...$extras]);
                 $used[$instanceKey] = $published;
                 return $instance;
             } catch (\Throwable $error) {

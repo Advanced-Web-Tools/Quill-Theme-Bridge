@@ -59,7 +59,7 @@ final class LinkedEditing
     private function assertNoExternalLink(int $themeKey, string $pageKey): void
     {
         if (class_exists(\Quill\services\editor\ExternalPageOverrides::class)
-            && (new \Quill\services\editor\ExternalPageOverrides())->find(Keys::source($themeKey, $pageKey)) !== null) {
+            && (new \Quill\services\editor\ExternalPageOverrides())->find($this->resources->resourceKey($themeKey, 'page', $pageKey)) !== null) {
             throw new \DomainException('Source already has an explicit Quill external editor link.');
         }
     }

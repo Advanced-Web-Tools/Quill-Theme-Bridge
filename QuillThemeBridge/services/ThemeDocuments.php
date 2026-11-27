@@ -21,10 +21,10 @@ final class ThemeDocuments
         }
         return $this->engine->forTheme($id);
     }
-    private function context(Engine $engine, string $page = ''): ThemePageContext
+    private function context(Engine $engine, string $page = '', array $data = []): ThemePageContext
     {
         $theme = $engine->activeTheme();
-        return new ThemePageContext(new Context($theme->root . '/', $theme->name, (string) $theme->packageId), $theme, $page, $engine->settings(), []);
+        return new ThemePageContext(new Context($theme->root . '/', $theme->name, (string) $theme->packageId), $theme, $page, $engine->settings(), $data);
     }
     public function page(int $themeId, string $pageKey): IURPCDocument
     {
@@ -35,9 +35,9 @@ final class ThemeDocuments
         foreach (LayoutBuilder::findSlot($assembled, 'content')?->getBlockChildren() ?? [] as $block) $document->addBlock('content', $block);
         return $document;
     }
-    private function source(Engine $engine, SectionSource $source, string $slot): array
+    private function source(Engine $engine, SectionSource $source, string $slot, ?ThemePageContext $context = null): array
     {
-        $context = $this->context($engine);
+        $context ??= $this->context($engine);
         if ($source->file !== null) return $engine->cache->load(ThemeRegistry::resolveFile($context->theme->root, $source->file), $context->theme->name . '/' . $source->file);
         $document = new URPCDocument();
         foreach ($source->provider->createBlocks($context) as $block) {
@@ -47,6 +47,30 @@ final class ThemeDocuments
         (new BlockIdentity())->assignDocument($document, $context->theme->name . '/providers/' . $source->key);
         return array_values($document->getSections()[$slot] ?? []);
     }
+
+    /** Try the global source first so existing component identities remain stable. */
+    private function componentBlocks(Engine $engine, callable $create): array
+    {
+        $error = null;
+        try {
+            $blocks = $create($this->context($engine));
+            if ($blocks !== []) return $blocks;
+        } catch (\Throwable $error) {}
+
+        $tried = [];
+        foreach ($engine->definition()->routes as $route) {
+            if (str_contains($route->path, '{') || isset($tried[$route->pageKey])) continue;
+            $tried[$route->pageKey] = true;
+            try {
+                $blocks = $create($this->context($engine, $route->pageKey, ['params' => []]));
+                if ($blocks !== []) return $blocks;
+            } catch (\Throwable $failure) {
+                $error ??= $failure;
+            }
+        }
+        if ($error !== null) throw $error;
+        return [];
+    }
     public function compose(IURPCDocument $content, array $retainedAssets = ['styles' => [], 'scripts' => []]): ?IURPCDocument
     {
         if (!$this->engine->hasActiveTheme()) return null;
@@ -55,7 +79,10 @@ final class ThemeDocuments
         $slots = array_fill_keys(ThemeDefinition::SLOTS, []);
         foreach (ThemeDefinition::OPTIONAL as $slot) {
             if (!($enabled[$slot] ?? false)) continue;
-            if (isset($definition->sections[$slot])) $slots[$slot] = $this->source($engine, $definition->sections[$slot], $slot);
+            if (isset($definition->sections[$slot])) {
+                try { $slots[$slot] = $this->source($engine, $definition->sections[$slot], $slot); }
+                catch (\Throwable $error) { error_log('QuillThemeBridge section ' . $slot . ': ' . $error->getMessage()); }
+            }
             if (in_array($slot, ['side_l', 'side_r'], true)) {
                 foreach ($engine->globalWidgets()[$slot] as $key) {
                     try { $slots[$slot] = [...$slots[$slot], ...$engine->widgets->render([$key], $this->context($engine), $slot)]; }
@@ -83,7 +110,11 @@ final class ThemeDocuments
         if (!in_array($slot, ThemeDefinition::SLOTS, true)) throw new \InvalidArgumentException('Unknown layout slot.');
         $source = $engine->definition()->sections[$slot] ?? null;
         $slots = array_fill_keys(ThemeDefinition::SLOTS, []);
-        $slots[$slot] = $source === null ? [] : $this->source($engine, $source, $slot);
+        $slots[$slot] = match (true) {
+            $source === null => [],
+            $source->file !== null => $this->source($engine, $source, $slot),
+            default => $this->componentBlocks($engine, fn (ThemePageContext $context) => $this->source($engine, $source, $slot, $context)),
+        };
         $layout = (new LayoutBuilder())->build($slots, array_fill_keys(ThemeDefinition::SLOTS, true), $engine->activeTheme()->name, [], []);
         $document = new URPCDocument(); $document->addBlock('main', LayoutBuilder::findSlot($layout, $slot)); return $document;
     }
@@ -92,7 +123,9 @@ final class ThemeDocuments
         $engine = $this->selected($themeId);
         if (!isset($engine->widgets->all()[$key])) throw new \OutOfBoundsException('Unknown widget.');
         $document = new URPCDocument();
-        foreach ($engine->widgets->render([$key], $this->context($engine), 'side_l') as $block) $document->addBlock('main', $block);
+        foreach ($this->componentBlocks($engine, fn (ThemePageContext $context) => $engine->widgets->render([$key], $context, 'side_l')) as $block) {
+            $document->addBlock('main', $block);
+        }
         return $document;
     }
 }

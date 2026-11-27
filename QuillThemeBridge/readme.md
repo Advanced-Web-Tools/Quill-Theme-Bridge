@@ -2,7 +2,7 @@
 
 AWT package connecting ThemeEngine, Quill and URPC through their existing public classes and events. **No dependency files are changed.** All adapters, event listeners, public assets and link storage belong to this package. There are no bridge controllers, routes, administrative views, modals or frontend application.
 
-Requirements: PHP 8.2+, AWT 27+, ThemeEngine 1.0.5+, Quill 1.0.0+, URPC 1.0.0+. Install the dependencies normally, then install/update and enable the bridge through AWT PackageManager. Install/update hooks create only `quill_theme_bridge_link`. No compatibility patch installer, class aliases, vendor namespace replacements or copied upstream classes are needed.
+Requirements: PHP 8.2+, AWT 27.2+, ThemeEngine 1.0.5+, Quill 1.0.2+, URPC 1.1.0+. Install the dependencies normally, then install/update and enable the bridge through AWT PackageManager. Install/update hooks create the bridge link and theme recovery tables. No compatibility patch installer, class aliases, vendor namespace replacements or copied upstream classes are needed.
 
 ## Integration
 
@@ -14,6 +14,7 @@ Requirements: PHP 8.2+, AWT 27+, ThemeEngine 1.0.5+, Quill 1.0.0+, URPC 1.0.0+. 
 | `quill.page.document.request` | Compose the already converted published Quill document into the active theme's global layout and retain Quill assets. |
 | `theme_engine.page.ready` | Apply published component changes in their native layout slots/widget placements, then page-specific published UID replacements for the actually rendered theme/page. Applies in public rendering and ThemeEngine preview. |
 | AWT `renderer.ready` | Group resources inside existing Quill Pages → Other and Components → External views and attach the existing editor's resource extension. |
+| AWT `router.enter` | After a successful Quill write request, dispatch `urpc.template_cache.invalidate` for the affected Quill and theme page namespaces. |
 | Browser `quill.editor.ready` | Extend the existing editor instance's insertion flow and component picker; use its normal history/save/publish logic. |
 
 ThemeEngine final classes are consumed by composition. `ThemeDocuments` uses public Engine configuration, ThemeRegistry file resolution, JsonSourceCache, ISectionProvider, SidebarWidgetRegistry, LayoutBuilder and BlockIdentity. Page source acquisition calls `Engine::createDocument`; no page controller action, widget block renderer or full page renderer is executed by registration. The bridge does not reconstruct ThemeEngine configuration or maintain a second theme engine.
@@ -57,9 +58,19 @@ The inspected Quill also exposes the public `ExternalPageOverrides` service. **E
 
 On ThemeEngine rendering, both association mechanisms are checked. If a native external page and a different bridge-linked page target the same source, rendering diagnoses the conflict and keeps the original theme content. The linked-editing API also rejects creation/linking when a native association already exists. Discovery never creates either association.
 
-The native editor owns UID patches and their published snapshot manifests, including the real `urpc_uid` columns. Install/update Quill through its normal lifecycle so its own migrations are applied. The bridge never migrates Quill tables. Native source editing currently allows editing existing blocks; adding, deleting and moving blocks are restricted by Quill. Bridge-linked local drafts continue to use the ordinary editor.
+The native editor owns UID patches and their published snapshot manifests, including the real `urpc_uid` columns. Install/update Quill through its normal lifecycle so its own migrations are applied. The bridge never migrates Quill tables. Quill applies supported structural changes through its source override API. An external component keeps a single root. Bridge-linked local drafts continue to use the ordinary editor.
 
 Ordinary imported copies retain each original UID and source in `descriptor.props.quillThemeBridge` through Quill’s existing mapper, save and snapshot APIs. This also allows an explicit later link without positional inference. Source metadata includes its original theme/page, so copying a document from another theme cannot silently override matching UIDs. Duplicating/inserting local blocks clears their source UID in both descriptor and editor metadata, while retaining the theme association needed for CSS. Undo/redo uses the existing editor history.
+
+## Recovering Quill external publications after a theme reinstall
+
+After updating QuillThemeBridge, run this command from the AWT root with the confirmed IDs and installed package name:
+
+```sh
+php awt quill-theme-recover OLD_ID INSTALLED_ID PACKAGE_NAME
+```
+
+The previous ID must be absent from ThemeEngine's registry. The installed theme must be enabled. The bridge reuses Quill's original external owner key for resource keys that still exist in the installed theme, preserving its drafts and snapshots. If both IDs already have an owner for a resource, the installed ID keeps its owner and the command reports the conflict. The mapping is stored by the bridge. Quill records are read through Quill's APIs. A recovered publication still depends on matching original source blocks.
 
 ## Published theme component changes
 
@@ -67,7 +78,7 @@ Quill’s current **Components → External → Edit in Quill** operation owns a
 
 Published changes apply both to ThemeEngine pages and to the theme layout composed around published Quill pages. They do not require a linked page override. Only existing native slots and configured widget placements are updated; publication never enables a disabled part or inserts an unconfigured widget. Page-local section sources retain ownership of their slots. Resource lookup always includes the rendered theme’s persisted identity, component type and key.
 
-Native wrappers are associated through ThemeEngine’s explicit slot/widget source namespaces and keys. Edited wrapper fields retain the actual placement’s UID, source namespace, unrelated runtime attributes and configured sidebar widgets. Identical instances receive the complete published source subtree; context-dependent source trees receive conservative matches by original UID. This comparison does not create a positional UID mapping. Unmatched source blocks remain unchanged. Theme providers that need page-specific data may therefore expose only the matching shared subset of their component edits.
+Native wrappers are associated through ThemeEngine’s explicit slot/widget source namespaces and keys. Edited wrapper fields retain the actual placement’s UID, source namespace, unrelated runtime attributes and configured sidebar widgets. Equivalent instances receive the complete published source subtree and keep the live active-item attribute unless it was edited in Quill. Context-dependent instances apply edits to matching original UIDs and uniquely matching unchanged subtrees. The live provider retains responsibility for page-specific content.
 
 Each placement uses Quill’s normal component expander through a bridge-owned content-source adapter. Quill scopes actions, targets, styles and animations independently, including repeated placements of the same widget. Assets are transported through ordinary URPC nodes and deduplicated against the theme, other components and retained Quill page assets. Source registration stays read-only and returns original source documents, so opening/saving the editor does not recursively import published replacements. Standalone component previews remain components and are not wrapped in a complete theme layout.
 
@@ -77,11 +88,11 @@ Components are resolved before page-specific replacements. Missing/unpublished c
 
 Every block of every page/component source carries its original URPC UID, source namespace and stable theme/page association in the extensible URPC descriptor property `quillThemeBridge`. Quill's existing import/editor/save/snapshot flow preserves that association. Missing native wrapper UIDs are assigned through URPC before registration, preserving existing source identities. Duplicate source UIDs reject that resource with a diagnostic. Asset URLs and settings are resolved from the enabled source theme's current public definition and `Engine::settings()`, rather than from client-supplied URLs or copied working settings.
 
-The editor's existing `getPreviewAssets()` flow adds the source theme's declared CSS once. Its existing canvas receives explicitly mapped body classes, CSS variables and document language. Theme scripts are never executed in the editor. Public/external previews include declared theme CSS/scripts through normal URPC asset nodes; Quill's retained publication assets are deduplicated using a bridge-owned `URPCBlockDescriptor` extension with runtime-only state. No extra Quill schema fields or wrappers are introduced.
+The editor's existing `getPreviewAssets()` flow adds the declared stylesheets of the active theme on local pages and the source theme on external documents and imported copies. It also loads styles for referenced external components and applies their theme classes and variables to their existing canvas wrappers. It deduplicates stylesheet URLs and loads Quill's document styles after the theme styles. The canvas applies the primary theme's body classes, CSS variables and language. Theme scripts are never executed in the editor. Public/external previews include declared theme CSS/scripts through normal URPC asset nodes; Quill's retained publication assets are deduplicated using a bridge-owned `URPCBlockDescriptor` extension with runtime-only state. No extra Quill schema fields or wrappers are introduced.
 
 Quill pages composed into the active theme use that theme's normalized saved appearance settings. Source previews/local copies use their own theme's appearance. Settings remain owned and edited by ThemeEngine; the bridge never writes them or copies them into palette preferences.
 
-StillTheme is supported by an explicit bridge-owned adapter based on its actual `GalleryPage` contract: `palette` maps to `still-site` plus `still-paper`/`still-white`/`still-dark`, and `language` maps to the document language. No protected controller methods are called. Existing custom theme adapters take precedence over this supplied adapter.
+Built-in appearance adapters mirror the public page appearance of StillTheme, MonoTheme and TerraTheme. All three apply the saved palette and language. MonoTheme also applies its saved spacing. A registered custom adapter takes precedence.
 
 For other themes whose visual rules exist only in custom controller code, register an explicit adapter from an enabled package runtime after waiting for QuillThemeBridge:
 
@@ -99,7 +110,7 @@ $styles->register($themePackageId, new class implements \QuillThemeBridge\api\IT
 });
 ```
 
-The example assumes that this theme declares an `accent` color setting. No generic setting-to-CSS inference is performed. Invalid adapters are diagnosed while preserving the theme's declared CSS. Mixed themes can contribute CSS to the same document; conflicting appearance contexts are not arbitrarily promoted to the editor body's global settings. Normalized setting values are passed to existing section/widget providers as before.
+The example assumes that this theme declares an `accent` color setting. No generic setting-to-CSS inference is performed. Invalid adapters are diagnosed while preserving the theme's declared CSS. On a local page with mixed source blocks, the active theme supplies the canvas appearance and the referenced sheets are loaded once. Normalized setting values are passed to existing section/widget providers as before.
 
 ## Priority for edited styles
 
@@ -146,7 +157,7 @@ Quill supplies the existing **External**, provider labels, **Explore** and **Mak
 Source documents are copied for composition and replacement. Weak maps track event/document instances without a persistent process-wide render flag. No finished-document cache is introduced. ThemeEngine's existing JSON source cache may write cache files; bridge rendering does not write database records.
 
 - Automatic palette discovery is supplied for StillTheme and MonoTheme. Other themes require an explicit palette provider or static contributions until ThemeEngine exposes a general palette contract.
-- Source providers receive an empty page key/data for global composition and component discovery. A provider requiring a concrete route or page can fail and is diagnosed; the bridge does not invent a page/parameter. In particular, the upstream Current page widget does not support that global context.
+- Component discovery uses the global source when available. For a provider that requires a page, it tries declared routes without required parameters as editor samples, including the Current page widget. ThemeEngine pages continue to provide the actual render context. Global layouts on local Quill pages have no ThemeEngine route context.
 - Quill pages lacking a publication keep their existing upstream behavior; the bridge does not wrap their working content. Theme overrides and ThemeEngine previews strictly require published snapshots.
 - Sites using CSP must permit `data:` stylesheets, or supply a compatible asset transport. Generated CSS is not silently dropped.
 - URPC source UIDs are content/structure-derived. An upstream theme update changing those UIDs makes old replacements stop matching; no positional migration is attempted.

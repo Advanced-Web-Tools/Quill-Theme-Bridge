@@ -1,7 +1,7 @@
 <?php
 use runtime\api\RuntimeAPI;
 use ThemeEngine\service\Engine;
-use QuillThemeBridge\services\{DatabaseLinks, Resources, LinkedEditing, BridgeListener};
+use QuillThemeBridge\services\{DatabaseLinks, Resources, LinkedEditing, BridgeListener, ThemeRecovery, RecoverThemeCommand, QuillCacheInvalidation};
 use Quill\api\events\{ExternalPagesRequestEvent, ExternalComponentsRequestEvent, ExternalColorPalettesRequestEvent, PageDocumentRequestEvent};
 use ThemeEngine\api\events\PageReadyEvent;
 
@@ -16,9 +16,13 @@ final class QuillThemeBridge extends RuntimeAPI
     {
         $engine = $this->getShared('ThemeEngine', 'engine', Engine::class) ?? throw new \LogicException('Missing ThemeEngine engine.');
         $context = new \context\Context(__DIR__, 'QuillThemeBridge', (string) $this->getInfo()['id']);
-        $links = new DatabaseLinks(new \database\provider\DatabaseProvider());
-        $styles = new \QuillThemeBridge\services\ThemeStyles($engine);
-        $resources = new Resources($engine, $context, $styles);
+        $database = new \database\provider\DatabaseProvider();
+        $links = new DatabaseLinks($database);
+        $recovery = new ThemeRecovery($engine, $database);
+        $styles = new \QuillThemeBridge\services\ThemeStyles($engine, $recovery);
+        $resources = new Resources($engine, $context, $styles, $recovery);
+        $this->addCommand(new RecoverThemeCommand($recovery));
+        $this->eventDispatcher->addListener('router.enter', new QuillCacheInvalidation($this->eventDispatcher, $engine, $recovery));
         $this->setShared('themeStyles', $styles);
         $this->eventDispatcher->addListener(\URPC\api\events\BeforeRenderEvent::NAME, new \QuillThemeBridge\services\ThemeAssetsListener($styles));
         $palettes = new \QuillThemeBridge\services\PaletteCatalog();

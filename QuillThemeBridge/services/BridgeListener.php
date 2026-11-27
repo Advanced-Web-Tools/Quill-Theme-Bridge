@@ -83,7 +83,8 @@ final class BridgeListener implements IEventListener
                     (new ThemeDocuments($this->engine))->selected($theme->packageId), $this->diagnostic(...), $event->context->pageKey);
                 $event->setDocument($document);
                 $pageId = $this->links->find($theme->packageId, $event->context->pageKey);
-                $sourceKey = Keys::source($theme->packageId, $event->context->pageKey);
+                $sourceThemeId = $this->resources->sourceThemeId($theme->packageId, 'page', $event->context->pageKey);
+                $sourceKey = Keys::source($sourceThemeId, $event->context->pageKey);
                 // Quill's explicit external Edit operation owns its source_key association.
                 $external = class_exists(\Quill\services\editor\ExternalPageOverrides::class)
                     ? (new \Quill\services\editor\ExternalPageOverrides())->find($sourceKey) : null;
@@ -93,7 +94,7 @@ final class BridgeListener implements IEventListener
                 $source = $external === null ? null : new \Quill\api\resources\ExternalDocument($sourceKey, $event->context->pageKey,
                     $this->engine->registry->get($theme->packageId)->name, $this->resources->page($theme->packageId, $event->context->pageKey));
                 if (($published = $this->published->convert($pageId, $source)) === null) return [];
-                [$document, $count] = (new Replacements())->apply($document, $published, $this->diagnostic(...), $theme->packageId, $event->context->pageKey);
+                [$document, $count] = (new Replacements())->apply($document, $published, $this->diagnostic(...), $external === null ? $theme->packageId : $sourceThemeId, $event->context->pageKey);
                 if ($count === 0) return [];
                 (new RenderMetadata())->attach($document, $published);
                 $event->setDocument($document);
